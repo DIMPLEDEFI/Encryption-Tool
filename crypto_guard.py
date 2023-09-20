@@ -1,6 +1,7 @@
 import os
 import sys
 import zlib
+import Cryptodome
 from Cryptodome.Cipher import AES
 from Cryptodome.Random import get_random_bytes
 from Cryptodome.Hash import HMAC, SHA256

@@ -1,21 +1,22 @@
 import os
 import sys
-import zlib
-import Cryptodome
-from Cryptodome.Cipher import AES
-from Cryptodome.Random import get_random_bytes
-from Cryptodome.Hash import HMAC, SHA256
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+from Crypto.Hash import HMAC, SHA256
 import hashlib
 import getpass
 import asyncio
 import pyperclip
 import re
+import zlib
 import tqdm
+import logging
 from datetime import datetime
 
-INPUT_FILE = "input.txt"
-ENCRYPTED_FILE = "encrypted.bin"
-DECRYPTED_FILE = "decrypted.txt"
+# Get the user's home directory and construct the paths to the desktop folder
+desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+ENCRYPTED_FILE = os.path.join(desktop_path, "encrypted.bin")
+DECRYPTED_FILE = os.path.join(desktop_path, "decrypted.txt")
 
 logging.basicConfig(filename="encryption_tool.log", level=logging.INFO)
 
@@ -70,26 +71,27 @@ async def read_file_async(file_path, chunk_size=65536):
                 break
             yield chunk
 
-async def process_file(input_file, output_file, passphrase, operation, compress=False):
-    salt = get_random_bytes(16)
+async def process_file(input_file, output_file, passphrase, operation, hmac_key=None, salt=None):
+    if operation == "encrypt":
+        salt = get_random_bytes(16)
     encryption_key, hmac_key = await derive_keys_from_passphrase(passphrase, salt)
     cipher = AES.new(encryption_key, AES.MODE_GCM)
     total_size = await get_file_size(input_file)
     
     with open(input_file, 'rb') as input_stream, open(output_file, 'wb') as output_stream:
-        output_stream.write(cipher.nonce)
+        if operation == "encrypt":
+            output_stream.write(salt)
         
         progress_desc = f"{operation.capitalize()}ing"
         with tqdm.tqdm(total=total_size, unit="B", unit_scale=True, desc=progress_desc) as pbar:
-            async for chunk in read_file_async(input_file):
-                if compress:
-                    chunk = zlib.compress(chunk, level=zlib.Z_BEST_COMPRESSION)
+            while True:
+                chunk = input_stream.read(65536)
+                if not chunk:
+                    break
                 if operation == "encrypt":
                     ciphertext, tag = cipher.encrypt_and_digest(chunk)
                 else:
                     ciphertext = cipher.decrypt(chunk)
-                    if compress:
-                        ciphertext = zlib.decompress(ciphertext)
                 output_stream.write(ciphertext)
                 pbar.update(len(chunk))
                 pbar.n = await calculate_progress(total_size, output_stream.tell())
@@ -98,12 +100,7 @@ async def process_file(input_file, output_file, passphrase, operation, compress=
     if operation == "encrypt":
         return salt, hmac_key
     else:
-        with open(output_file, 'rb') as decrypted_file_async:
-            decrypted_data = await decrypted_file_async.read()
-            decrypted_hmac = await calculate_hmac(decrypted_data, hmac_key)
-        
-        await secure_delete(output_file)
-        return decrypted_hmac
+        return salt, hmac_key
 
 async def clear_clipboard():
     pyperclip.copy("")
@@ -126,39 +123,44 @@ async def main():
         print("Weak passphrase. It should have at least 8 characters, including uppercase, lowercase, and a digit.")
         sys.exit(1)
     
-    compress = input("Enable file compression (y/n)? ").strip().lower() == 'y'
+    operation = input("Choose operation (encrypt/decrypt): ").strip().lower()
     
-    await validate_input_file(INPUT_FILE)
+    if operation not in ["encrypt", "decrypt"]:
+        print("Invalid operation. Please choose either 'encrypt' or 'decrypt'.")
+        sys.exit(1)
     
-    try:
-        await log_event("Starting encryption")
-        salt, hmac_key = await process_file(INPUT_FILE, ENCRYPTED_FILE, passphrase, "encrypt", compress)
+    input_file = input("Enter the path to the input file: ").strip()
+    
+    await validate_input_file(input_file)
+    
+    if operation == "encrypt":
+        salt, hmac_key = await process_file(input_file, ENCRYPTED_FILE, passphrase, operation)
         await log_event("Encryption completed")
-        
-        print(f"File '{INPUT_FILE}' encrypted to '{ENCRYPTED_FILE}'")
-        
-        file_hash = await calculate_file_hash(INPUT_FILE)
-        print(f"File hash (SHA-256): {file_hash}")
-        
-        await log_event("Starting decryption")
-        decrypted_hmac = await process_file(ENCRYPTED_FILE, DECRYPTED_FILE, passphrase, "decrypt", compress)
-        await log_event("Decryption completed")
-        
-        print(f"File '{ENCRYPTED_FILE}' decrypted to '{DECRYPTED_FILE}'")
-        
-        decrypted_file_hash = await calculate_file_hash(DECRYPTED_FILE)
-        result = "PASSED" if file_hash == decrypted_file_hash else "FAILED (The decrypted file may have been tampered with)"
-        print(f"File integrity check: {result}")
-        
-        print(f"Decrypted file HMAC: {decrypted_hmac.hex()}")
-        
-    except Exception as e:
-        print(f"An error occurred: {str(e)}")
-        await log_event(f"Error: {str(e)}")
-    
-    finally:
+        print(f"File '{input_file}' encrypted to '{ENCRYPTED_FILE}'")
+        print(f"Encryption salt: {salt.hex()}")
+        print(f"HMAC key: {hmac_key.hex()}")
         await clear_clipboard()
-        await secure_delete(INPUT_FILE)
+    else:
+        salt_input = input("Enter the encryption salt (hexadecimal string): ").strip()
+        try:
+            salt = bytes.fromhex(salt_input)
+        except ValueError:
+            print("Invalid salt format. It should be a hexadecimal string.")
+            sys.exit(1)
+
+        hmac_input = input("Enter the HMAC key (hexadecimal string): ").strip()
+        try:
+            hmac_key = bytes.fromhex(hmac_input)
+        except ValueError:
+            print("Invalid HMAC key format. It should be a hexadecimal string.")
+            sys.exit(1)
+        
+        await process_file(input_file, DECRYPTED_FILE, passphrase, operation, hmac_key, salt)
+        
+        print(f"File '{input_file}' decrypted to '{DECRYPTED_FILE}'")
+        await log_event("Decryption completed")
+    
+    sys.exit(0)
 
 if __name__ == "__main__":
     asyncio.run(main())

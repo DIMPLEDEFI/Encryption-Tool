@@ -1,9 +1,9 @@
 import os
 import sys
 import zlib
-from Crypto.Cipher import AES
-from Crypto.Random import get_random_bytes
-from Crypto.Hash import HMAC, SHA256
+from Cryptodome.Cipher import AES
+from Cryptodome.Random import get_random_bytes
+from Cryptodome.Hash import HMAC, SHA256
 import hashlib
 import getpass
 import asyncio

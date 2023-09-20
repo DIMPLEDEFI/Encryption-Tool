@@ -52,7 +52,8 @@ The Encryption Tool is a command-line utility designed to encrypt and decrypt fi
 
 3. Run the tool:
    ```
-   python crypto_guard.py 
+   cd ~/Desktop
+   python3 crypto_guard.py 
    ```
 
 4. Follow the on-screen instructions to encrypt or decrypt a file.
